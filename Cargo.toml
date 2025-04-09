@@ -1,6 +1,6 @@
 [package]
 name = "rfb2"
-version = "0.1.1"
+version = "0.1.2"
 description = "Implementation of the RFB protocol (RFC 6143), including a server implementation."
 repository = "https://github.com/portal-co/rfb2"
 readme = "README.md"
