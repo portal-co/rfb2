@@ -4,6 +4,7 @@
 //
 // Copyright 2022 Oxide Computer Company
 
+use std::fmt::Debug;
 use std::io;
 use std::marker::{Send, Sync};
 use std::net::SocketAddr;
@@ -63,7 +64,7 @@ pub struct VncServerData {
     pub input_pixel_format: PixelFormat,
 }
 
-pub struct VncServer<S: Server> {
+pub struct VncServer<S: Server<K>, K = SocketAddr> {
     /// VNC startup server configuration
     config: VncServerConfig,
 
@@ -71,21 +72,29 @@ pub struct VncServer<S: Server> {
     data: Mutex<VncServerData>,
 
     /// The underlying [`Server`] implementation
-    pub server: S,
+    pub server: Arc<dyn Fn(&K) -> Arc<S> + Send + Sync>,
 
     /// One-shot channel used to signal that the server should shut down.
     stop_ch: Mutex<Option<oneshot::Sender<()>>>,
 }
 
 #[async_trait]
-pub trait Server: Sync + Send + 'static {
+pub trait Server<K = SocketAddr>: Sync + Send + 'static {
     async fn get_framebuffer_update(&self) -> FramebufferUpdate;
     async fn key_event(&self, _ke: KeyEvent) {}
     async fn stop(&self) {}
 }
 
-impl<S: Server> VncServer<S> {
+impl<S: Server<K>, K: Debug + Send + Sync + 'static> VncServer<S, K> {
     pub fn new(server: S, config: VncServerConfig, data: VncServerData) -> Arc<Self> {
+        let server = Arc::new(server);
+        Self::new_base(Arc::new(move |_| server.clone()), config, data)
+    }
+    pub fn new_base(
+        server: Arc<dyn Fn(&K) -> Arc<S> + Send + Sync>,
+        config: VncServerConfig,
+        data: VncServerData,
+    ) -> Arc<Self> {
         assert!(
             config.sec_types.0.len() > 0,
             "at least one security type must be defined"
@@ -112,7 +121,7 @@ impl<S: Server> VncServer<S> {
     async fn rfb_handshake(
         &self,
         s: &mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync),
-        addr: SocketAddr,
+        addr: &K,
     ) -> Result<(), HandshakeError> {
         // ProtocolVersion handshake
         info!("Tx [{:?}]: ProtoVersion={:?}", addr, self.config.version);
@@ -160,7 +169,7 @@ impl<S: Server> VncServer<S> {
     async fn rfb_initialization(
         &self,
         s: &mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync),
-        addr: SocketAddr,
+        addr: &K,
     ) -> Result<(), ProtocolError> {
         let client_init = ClientInit::read_from(s).await?;
         info!("Rx [{:?}]: ClientInit={:?}", addr, client_init);
@@ -186,17 +195,17 @@ impl<S: Server> VncServer<S> {
     pub async fn handle_conn(
         &self,
         s: &mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync),
-        addr: SocketAddr,
+        addr: K,
         mut close_ch: Shared<oneshot::Receiver<()>>,
     ) {
         info!("[{:?}] new connection", addr);
 
-        if let Err(e) = self.rfb_handshake(s, addr).await {
+        if let Err(e) = self.rfb_handshake(s, &addr).await {
             error!("[{:?}] could not complete handshake: {:?}", addr, e);
             return;
         }
 
-        if let Err(e) = self.rfb_initialization(s, addr).await {
+        if let Err(e) = self.rfb_initialization(s, &addr).await {
             error!("[{:?}] could not complete handshake: {:?}", addr, e);
             return;
         }
@@ -204,6 +213,8 @@ impl<S: Server> VncServer<S> {
         let data = self.data.lock().await;
         let mut output_pixel_format = data.input_pixel_format.clone();
         drop(data);
+
+        let server = (self.server)(&addr);
 
         loop {
             let req = select! {
@@ -233,7 +244,7 @@ impl<S: Server> VncServer<S> {
                     ClientMessage::FramebufferUpdateRequest(f) => {
                         debug!("Rx [{:?}]: FramebufferUpdateRequest={:?}", addr, f);
 
-                        let mut fbu = self.server.get_framebuffer_update().await;
+                        let mut fbu = server.get_framebuffer_update().await;
 
                         let data = self.data.lock().await;
 
@@ -271,7 +282,7 @@ impl<S: Server> VncServer<S> {
                     }
                     ClientMessage::KeyEvent(ke) => {
                         trace!("Rx [{:?}]: KeyEvent={:?}", addr, ke);
-                        self.server.key_event(ke).await;
+                        server.key_event(ke).await;
                     }
                     ClientMessage::PointerEvent(pe) => {
                         trace!("Rx [{:?}: PointerEvent={:?}", addr, pe);
@@ -289,7 +300,7 @@ impl<S: Server> VncServer<S> {
     }
 
     /// Start listening for incoming connections.
-    pub async fn start(self: &Arc<Self>) -> io::Result<()> {
+    pub async fn start(self: &Arc<Self>) -> io::Result<()>  where K: From<SocketAddr>{
         let listener = TcpListener::bind(self.config.addr).await?;
 
         // Create a channel to signal the server to stop.
@@ -307,7 +318,7 @@ impl<S: Server> VncServer<S> {
 
                 _ = &mut close_rx => {
                     info!("server stopping");
-                    self.server.stop().await;
+                    // self.server.stop().await;
                     return Ok(());
                 }
 
@@ -318,7 +329,7 @@ impl<S: Server> VncServer<S> {
             let server = self.clone();
             tokio::spawn(async move {
                 server
-                    .handle_conn(&mut client_sock, client_addr, close_rx)
+                    .handle_conn(&mut client_sock, client_addr.into(), close_rx)
                     .await;
             });
         }
