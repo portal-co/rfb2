@@ -9,7 +9,7 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead,AsyncWrite};
 
 use crate::encodings::{Encoding, EncodingType};
 use crate::keysym::KeySym;
@@ -37,13 +37,13 @@ pub enum ProtocolError {
 }
 
 pub trait ReadMessage {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>>
+    fn read_from<'a>(stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<Self, ProtocolError>>
     where
         Self: Sized;
 }
 
 pub trait WriteMessage {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>>;
+    fn write_to<'a>(self, stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<(), ProtocolError>>;
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, PartialOrd)]
@@ -54,7 +54,7 @@ pub enum ProtoVersion {
 }
 
 impl ReadMessage for ProtoVersion {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>> {
+    fn read_from<'a>(stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<Self, ProtocolError>> {
         async move {
             let mut buf = [0u8; 12];
             stream.read_exact(&mut buf).await?;
@@ -71,7 +71,7 @@ impl ReadMessage for ProtoVersion {
 }
 
 impl WriteMessage for ProtoVersion {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to<'a>(self, stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<(), ProtocolError>> {
         async move {
             let s = match self {
                 ProtoVersion::Rfb33 => b"RFB 003.003\n",
@@ -96,7 +96,7 @@ pub enum SecurityType {
 }
 
 impl WriteMessage for SecurityTypes {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to<'a>(self, stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<(), ProtocolError>> {
         async move {
             // TODO: fix cast
             stream.write_u8(self.0.len() as u8).await?;
@@ -111,7 +111,7 @@ impl WriteMessage for SecurityTypes {
 }
 
 impl ReadMessage for SecurityType {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>> {
+    fn read_from<'a>(stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<Self, ProtocolError>> {
         async move {
             let t = stream.read_u8().await?;
             match t {
@@ -125,7 +125,7 @@ impl ReadMessage for SecurityType {
 }
 
 impl WriteMessage for SecurityType {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to<'a>(self, stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<(), ProtocolError>> {
         async move {
             let val = match self {
                 SecurityType::None => 0,
@@ -146,7 +146,7 @@ pub enum SecurityResult {
 }
 
 impl WriteMessage for SecurityResult {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to<'a>(self, stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<(), ProtocolError>> {
         async move {
             match self {
                 SecurityResult::Success => {
@@ -171,7 +171,7 @@ pub struct ClientInit {
 }
 
 impl ReadMessage for ClientInit {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>> {
+    fn read_from<'a>(stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<Self, ProtocolError>> {
         async {
             let flag = stream.read_u8().await?;
             match flag {
@@ -202,7 +202,7 @@ impl ServerInit {
 }
 
 impl WriteMessage for ServerInit {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to<'a>(self, stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<(), ProtocolError>> {
         async move {
             self.initial_res.write_to(stream).await?;
             self.pixel_format.write_to(stream).await?;
@@ -251,7 +251,7 @@ pub(crate) struct Position {
 }
 
 impl ReadMessage for Position {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>> {
+    fn read_from<'a>(stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<Self, ProtocolError>> {
         async {
             let x = stream.read_u16().await?;
             let y = stream.read_u16().await?;
@@ -269,7 +269,7 @@ pub(crate) struct Resolution {
 }
 
 impl ReadMessage for Resolution {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>> {
+    fn read_from<'a>(stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<Self, ProtocolError>> {
         async {
             let width = stream.read_u16().await?;
             let height = stream.read_u16().await?;
@@ -281,7 +281,7 @@ impl ReadMessage for Resolution {
 }
 
 impl WriteMessage for Resolution {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to<'a>(self, stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<(), ProtocolError>> {
         async move {
             stream.write_u16(self.width).await?;
             stream.write_u16(self.height).await?;
@@ -316,7 +316,7 @@ impl Rectangle {
 }
 
 impl WriteMessage for Rectangle {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to<'a>(self, stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<(), ProtocolError>> {
         async move {
             let encoding_type: i32 = self.data.get_type().into();
 
@@ -336,7 +336,7 @@ impl WriteMessage for Rectangle {
 }
 
 impl WriteMessage for FramebufferUpdate {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to<'a>(self, stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<(), ProtocolError>> {
         async move {
             // TODO: type function?
             stream.write_u8(0).await?;
@@ -437,7 +437,7 @@ impl PixelFormat {
 }
 
 impl ReadMessage for PixelFormat {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>> {
+    fn read_from<'a>(stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<Self, ProtocolError>> {
         async {
             let bits_per_pixel = stream.read_u8().await?;
             let depth = stream.read_u8().await?;
@@ -464,7 +464,7 @@ impl ReadMessage for PixelFormat {
 }
 
 impl WriteMessage for PixelFormat {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to<'a>(self, stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<(), ProtocolError>> {
         async move {
             stream.write_u8(self.bits_per_pixel).await?;
             stream.write_u8(self.depth).await?;
@@ -503,7 +503,7 @@ pub struct ColorFormat {
 pub struct ColorMap {}
 
 impl ReadMessage for ColorSpecification {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>> {
+    fn read_from<'a>(stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<Self, ProtocolError>> {
         async {
             let tc_flag = stream.read_u8().await?;
             match tc_flag {
@@ -537,7 +537,7 @@ impl ReadMessage for ColorSpecification {
 }
 
 impl WriteMessage for ColorSpecification {
-    fn write_to<'a>(self, stream: &'a mut TcpStream) -> BoxFuture<'a, Result<(), ProtocolError>> {
+    fn write_to<'a>(self, stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<(), ProtocolError>> {
         async move {
             match self {
                 ColorSpecification::ColorFormat(cf) => {
@@ -573,7 +573,7 @@ pub enum ClientMessage {
 
 impl ReadMessage for ClientMessage {
     fn read_from<'a>(
-        stream: &'a mut TcpStream,
+        stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync),
     ) -> BoxFuture<'a, Result<ClientMessage, ProtocolError>> {
         async {
             let t = stream.read_u8().await?;
@@ -721,7 +721,7 @@ pub struct PointerEvent {
 }
 
 impl ReadMessage for PointerEvent {
-    fn read_from<'a>(stream: &'a mut TcpStream) -> BoxFuture<'a, Result<Self, ProtocolError>> {
+    fn read_from<'a>(stream: &'a mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync)) -> BoxFuture<'a, Result<Self, ProtocolError>> {
         async {
             let button_mask = stream.read_u8().await?;
             let pressed = MouseButtons::from_bits_truncate(button_mask);

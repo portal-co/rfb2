@@ -10,14 +10,14 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::FutureExt;
 use futures::future::Shared;
+use futures::FutureExt;
 use log::{debug, error, info, trace};
 use thiserror::Error;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::select;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 
 use crate::rfb::{
     ClientInit, ClientMessage, FramebufferUpdate, KeyEvent, PixelFormat, ProtoVersion,
@@ -111,7 +111,7 @@ impl<S: Server> VncServer<S> {
 
     async fn rfb_handshake(
         &self,
-        s: &mut TcpStream,
+        s: &mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync),
         addr: SocketAddr,
     ) -> Result<(), HandshakeError> {
         // ProtocolVersion handshake
@@ -159,7 +159,7 @@ impl<S: Server> VncServer<S> {
 
     async fn rfb_initialization(
         &self,
-        s: &mut TcpStream,
+        s: &mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync),
         addr: SocketAddr,
     ) -> Result<(), ProtocolError> {
         let client_init = ClientInit::read_from(s).await?;
@@ -183,7 +183,12 @@ impl<S: Server> VncServer<S> {
         Ok(())
     }
 
-    async fn handle_conn(&self, s: &mut TcpStream, addr: SocketAddr, mut close_ch: Shared<oneshot::Receiver<()>>) {
+    pub async fn handle_conn(
+        &self,
+        s: &mut (impl AsyncRead + AsyncWrite + Unpin + Send + Sync),
+        addr: SocketAddr,
+        mut close_ch: Shared<oneshot::Receiver<()>>,
+    ) {
         info!("[{:?}] new connection", addr);
 
         if let Err(e) = self.rfb_handshake(s, addr).await {
@@ -289,7 +294,10 @@ impl<S: Server> VncServer<S> {
 
         // Create a channel to signal the server to stop.
         let (close_tx, close_rx) = oneshot::channel();
-        assert!(self.stop_ch.lock().await.replace(close_tx).is_none(), "server already started");
+        assert!(
+            self.stop_ch.lock().await.replace(close_tx).is_none(),
+            "server already started"
+        );
         let mut close_rx = close_rx.shared();
 
         loop {
@@ -309,7 +317,9 @@ impl<S: Server> VncServer<S> {
             let close_rx = close_rx.clone();
             let server = self.clone();
             tokio::spawn(async move {
-                server.handle_conn(&mut client_sock, client_addr, close_rx).await;
+                server
+                    .handle_conn(&mut client_sock, client_addr, close_rx)
+                    .await;
             });
         }
     }
