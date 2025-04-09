@@ -1,10 +1,10 @@
 [package]
-name = "rfb"
+name = "rfb2"
 version = "0.1.0"
 description = "Implementation of the RFB protocol (RFC 6143), including a server implementation."
-repository = "https://github.com/oxidecomputer/rfb"
+repository = "https://github.com/portal-co/rfb2"
 readme = "README.md"
-authors = ["Jordan Paige Hendricks <jordan@oxide.computer"]
+authors = ["Jordan Paige Hendricks <jordan@oxide.computer","gkgoat"]
 license = "MPL-2.0"
 edition = "2021"
 
